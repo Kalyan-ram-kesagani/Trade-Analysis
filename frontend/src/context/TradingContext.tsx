@@ -78,11 +78,11 @@ const TradingContext = createContext<TradingContextType | undefined>(undefined);
 
 export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
-  const [selectedAccountId, setSelectedAccountIdState] = useState<string>('acc-main-01');
-  const [dataMode, setDataMode] = useState<'demo' | 'live'>('live');
-  const [syncStatus, setSyncStatus] = useState<'connected' | 'disconnected' | 'delayed'>('connected');
-  const [lastSync, setLastSync] = useState<string>('12:07:42');
-  const [pingMs, setPingMs] = useState<number>(18);
+  const [selectedAccountId, setSelectedAccountIdState] = useState<string>('all');
+const [dataMode, setDataMode] = useState<'demo' | 'live'>('live');
+const [syncStatus, setSyncStatus] = useState<'connected' | 'disconnected' | 'delayed'>('disconnected');
+const [lastSync, setLastSync] = useState<string>('');
+const [pingMs, setPingMs] = useState<number>(0);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -90,15 +90,15 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [recentActivities, setRecentActivities] = useState<SystemActivity[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
-  const [riskStatus, setRiskStatus] = useState<RiskStatus>({
-    daily_risk_percent: 2.0,
-    daily_limit_percent: 5.0,
-    status: 'within_limit',
-    current_drawdown: 0.8,
-    max_drawdown_limit: 4.0,
-    trades_remaining_today: 3,
-    max_daily_trades: 5,
-  });
+ const [riskStatus, setRiskStatus] = useState<RiskStatus>({
+  daily_risk_percent: 0,
+  daily_limit_percent: 0,
+  status: 'within_limit',
+  current_drawdown: 0,
+  max_drawdown_limit: 0,
+  trades_remaining_today: 0,
+  max_daily_trades: 0,
+});
   const [systemHealth, setSystemHealth] = useState<SystemHealthItem[]>([]);
 
   const [selectedTradeForDetails, setSelectedTradeForDetails] = useState<Trade | null>(null);
@@ -233,7 +233,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         floatingPL,
         margin,
         freeMargin,
-        drawdown: 1.1,
+        drawdown: 0,
         totalTrades,
         overallWinRate,
         totalPL,
@@ -334,9 +334,18 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const updatedAccounts = await TradingAPI.getAccounts();
       setAccounts(updatedAccounts);
       setSelectedAccountId(newAcc.id);
+      try {
+        const res = await TradingAPI.syncAccount(newAcc.id);
+        setLastSync(res.lastSync);
+        setPingMs(res.ping);
+        setSyncStatus('connected');
+        await refreshAccountData(newAcc.id);
+      } catch (err) {
+        console.warn('Initial sync deferred:', err);
+      }
       return newAcc;
     },
-    [setSelectedAccountId]
+    [setSelectedAccountId, refreshAccountData]
   );
 
   // Remove account action

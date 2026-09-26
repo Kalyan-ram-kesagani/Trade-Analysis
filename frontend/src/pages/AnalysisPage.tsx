@@ -22,7 +22,17 @@ export const AnalysisPage: React.FC = () => {
 
   const avgWin = wins.length > 0 ? wins.reduce((sum, w) => sum + w.net_pl, 0) / wins.length : 0;
   const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((sum, l) => sum + l.net_pl, 0) / losses.length) : 0;
-  const winLossRatio = avgLoss > 0 ? (avgWin / avgLoss).toFixed(2) : avgWin > 0 ? '10.0' : '0.0';
+  const winLossRatio =
+  avgWin > 0 && avgLoss > 0
+    ? (avgWin / avgLoss).toFixed(2)
+    : null;
+
+const completedTrades = wins.length + losses.length;
+
+const lossRate =
+  completedTrades > 0
+    ? (losses.length / completedTrades) * 100
+    : null;
 
   // Symbol distribution
   const symbolStats = trades.reduce((acc, t) => {
@@ -99,9 +109,13 @@ export const AnalysisPage: React.FC = () => {
         />
         <MetricCard
           label="Win / Loss Payoff"
-          value={`1 : ${winLossRatio}`}
+          value={winLossRatio === null ? 'N/A' : `1 : ${winLossRatio}`}
           subvalue="Average win vs average loss"
-          trend={Number(winLossRatio) >= 1.5 ? 'positive' : 'neutral'}
+          trend={
+  winLossRatio !== null && Number(winLossRatio) >= 1.5
+    ? 'positive'
+    : 'neutral'
+}
         />
         <MetricCard
           label="Average Win"
@@ -135,7 +149,9 @@ export const AnalysisPage: React.FC = () => {
               </h2>
             </div>
             <span className="text-xs font-mono font-semibold text-emerald-500">
-              {metrics.overallWinRate}% Win Rate
+              {completedTrades > 0
+  ? `${((wins.length / completedTrades) * 100).toFixed(1)}% Win Rate`
+  : 'N/A'}
             </span>
           </div>
 
@@ -198,7 +214,9 @@ export const AnalysisPage: React.FC = () => {
               </h2>
             </div>
             <span className="text-xs font-mono font-semibold text-rose-500">
-              {100 - metrics.overallWinRate}% Loss Rate
+              {lossRate === null
+  ? 'N/A'
+  : `${lossRate.toFixed(1)}% Loss Rate`}
             </span>
           </div>
 
@@ -236,7 +254,7 @@ export const AnalysisPage: React.FC = () => {
             >
               <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>Max Risk Adherence:</span>
               <span className={`font-mono font-medium tabular-nums ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                100% within configured limits
+                Risk adherence not available
               </span>
             </div>
           </div>

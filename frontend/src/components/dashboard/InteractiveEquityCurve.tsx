@@ -9,17 +9,82 @@ import {
   Tooltip,
 } from 'recharts';
 import { useTrading } from '../../context/TradingContext';
-import { generateEquityCurve } from '../../data/mockData';
+
 
 type Timeframe = '1D' | '1W' | '1M' | '3M' | '6M' | '1Y' | 'All';
 
 export const InteractiveEquityCurve: React.FC = () => {
-  const { selectedAccountId, isAllAccounts, activeAccount, theme } = useTrading();
+  const {
+  selectedAccountId,
+  isAllAccounts,
+  activeAccount,
+  accounts,
+  theme,
+} = useTrading();
   const [timeframe, setTimeframe] = useState<Timeframe>('1M');
 
   const data = useMemo(() => {
-    return generateEquityCurve(selectedAccountId, timeframe);
-  }, [selectedAccountId, timeframe]);
+  if (isAllAccounts) {
+    if (accounts.length === 0) {
+      return [];
+    }
+
+    const balance = accounts.reduce(
+      (sum, account) => sum + account.balance,
+      0
+    );
+
+    const equity = accounts.reduce(
+      (sum, account) => sum + account.equity,
+      0
+    );
+
+    const drawdown =
+      balance > 0
+        ? Math.max(
+            0,
+            Math.round(((balance - equity) / balance) * 1000) / 10
+          )
+        : 0;
+
+    return [
+      {
+        date: 'Current',
+        timestamp: Date.now(),
+        balance,
+        equity,
+        drawdown,
+        pl: equity - balance,
+      },
+    ];
+  }
+
+  if (!activeAccount) {
+    return [];
+  }
+
+  const balance = activeAccount.balance;
+  const equity = activeAccount.equity;
+
+  const drawdown =
+    balance > 0
+      ? Math.max(
+          0,
+          Math.round(((balance - equity) / balance) * 1000) / 10
+        )
+      : 0;
+
+  return [
+    {
+      date: 'Current',
+      timestamp: Date.now(),
+      balance,
+      equity,
+      drawdown,
+      pl: equity - balance,
+    },
+  ];
+}, [isAllAccounts, accounts, activeAccount, timeframe]);
 
   const timeframes: Timeframe[] = ['1D', '1W', '1M', '3M', '6M', '1Y', 'All'];
 
@@ -121,63 +186,140 @@ export const InteractiveEquityCurve: React.FC = () => {
         </div>
       </div>
 
-      {/* User's Recharts Equity Curve Container */}
-      <div className="mt-5 h-[300px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-            <defs>
-              <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
-                <stop
-                  offset="0%"
-                  stopColor={positive ? 'var(--color-profit)' : 'var(--color-loss)'}
-                  stopOpacity={0.25}
-                />
-                <stop
-                  offset="100%"
-                  stopColor={positive ? 'var(--color-profit)' : 'var(--color-loss)'}
-                  stopOpacity={0}
-                />
-              </linearGradient>
-            </defs>
-            <CartesianGrid stroke="var(--color-border)" vertical={false} />
-            <XAxis
-              dataKey="date"
-              tickLine={false}
-              axisLine={false}
-              minTickGap={40}
-              tick={{ fontSize: 11, fill: 'var(--color-muted-foreground)' }}
-            />
-            <YAxis
-              width={64}
-              tickLine={false}
-              axisLine={false}
-              domain={['auto', 'auto']}
-              tick={{ fontSize: 11, fill: 'var(--color-muted-foreground)' }}
-              tickFormatter={(v: number) => `$${Math.round(v).toLocaleString()}`}
-            />
-            <Tooltip
-              cursor={{ stroke: 'var(--color-border)' }}
-              contentStyle={{
-                background: 'var(--color-popover)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 10,
-                fontSize: 12,
-                color: 'var(--color-popover-foreground)',
-              }}
-              labelStyle={{ color: 'var(--color-muted-foreground)' }}
-              formatter={(value: any) => [formatCurrency(Number(value)), 'Equity']}
-            />
-            <Area
-              type="monotone"
-              dataKey="equity"
-              stroke={positive ? 'var(--color-profit)' : 'var(--color-loss)'}
-              strokeWidth={2}
-              fill="url(#equityFill)"
-              animationDuration={600}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+      {/* Equity Curve */}
+<div className="mt-5 h-[300px] w-full">
+  {data.length === 0 ? (
+    <div
+      className={`h-full flex items-center justify-center rounded-md border ${
+        theme === 'dark'
+          ? 'border-slate-800 bg-slate-950/40'
+          : 'border-slate-200 bg-slate-50'
+      }`}
+    >
+      <div className="text-center">
+        <p
+          className={`text-sm font-medium ${
+            theme === 'dark'
+              ? 'text-slate-300'
+              : 'text-slate-700'
+          }`}
+        >
+          No equity data available
+        </p>
+
+        <p
+          className={`mt-1 text-xs ${
+            theme === 'dark'
+              ? 'text-slate-500'
+              : 'text-slate-500'
+          }`}
+        >
+          Connect an MT5 trading account to view equity history.
+        </p>
       </div>
+    </div>
+  ) : (
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart
+        data={data}
+        margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+      >
+        <defs>
+          <linearGradient
+            id="equityFill"
+            x1="0"
+            y1="0"
+            x2="0"
+            y2="1"
+          >
+            <stop
+              offset="0%"
+              stopColor={
+                positive
+                  ? 'var(--color-profit)'
+                  : 'var(--color-loss)'
+              }
+              stopOpacity={0.25}
+            />
+
+            <stop
+              offset="100%"
+              stopColor={
+                positive
+                  ? 'var(--color-profit)'
+                  : 'var(--color-loss)'
+              }
+              stopOpacity={0}
+            />
+          </linearGradient>
+        </defs>
+
+        <CartesianGrid
+          stroke="var(--color-border)"
+          vertical={false}
+        />
+
+        <XAxis
+          dataKey="date"
+          tickLine={false}
+          axisLine={false}
+          minTickGap={40}
+          tick={{
+            fontSize: 11,
+            fill: 'var(--color-muted-foreground)',
+          }}
+        />
+
+        <YAxis
+          width={64}
+          tickLine={false}
+          axisLine={false}
+          domain={['auto', 'auto']}
+          tick={{
+            fontSize: 11,
+            fill: 'var(--color-muted-foreground)',
+          }}
+          tickFormatter={(v: number) =>
+            `$${Math.round(v).toLocaleString()}`
+          }
+        />
+
+        <Tooltip
+          cursor={{
+            stroke: 'var(--color-border)',
+          }}
+          contentStyle={{
+            background: 'var(--color-popover)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 10,
+            fontSize: 12,
+            color: 'var(--color-popover-foreground)',
+          }}
+          labelStyle={{
+            color: 'var(--color-muted-foreground)',
+          }}
+          formatter={(value: any) => [
+            formatCurrency(Number(value)),
+            'Equity',
+          ]}
+        />
+
+        <Area
+          type="monotone"
+          dataKey="equity"
+          stroke={
+            positive
+              ? 'var(--color-profit)'
+              : 'var(--color-loss)'
+          }
+          strokeWidth={2}
+          fill="url(#equityFill)"
+          animationDuration={600}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  )}
+</div>
     </div>
   );
 };

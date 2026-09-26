@@ -45,10 +45,17 @@ export const DashboardPage: React.FC = () => {
             <h1 className={`text-xl sm:text-2xl font-bold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
               Trading System
             </h1>
-            <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>MT5 Connected</span>
-            </div>
+            {syncStatus === 'connected' ? (
+              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>MT5 Connected</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs bg-amber-500/10 border border-amber-500/30 text-amber-500 font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                <span>MT5 Disconnected</span>
+              </div>
+            )}
           </div>
         </div>
 

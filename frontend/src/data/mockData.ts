@@ -843,7 +843,7 @@ export const MOCK_RISK_STATUS: Record<string, RiskStatus> = {
     daily_risk_percent: 2.4,
     daily_limit_percent: 5.0,
     status: 'within_limit',
-    current_drawdown: 1.1,
+    current_drawdown: 0,
     max_drawdown_limit: 4.0,
     trades_remaining_today: 8,
     max_daily_trades: 14,
