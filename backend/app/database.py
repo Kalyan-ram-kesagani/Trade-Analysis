@@ -21,6 +21,8 @@ engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
+    pool_size=1,
+    max_overflow=0,
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -29,4 +31,4 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
     autocommit=False,
     autoflush=False,
-)
+)
