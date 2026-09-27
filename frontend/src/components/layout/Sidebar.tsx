@@ -113,7 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     theme === 'dark' ? 'text-white' : 'text-slate-900'
                   }`}
                 >
-                  AEGIS TRADER
+                  TRADE-ANALYSIS
                 </span>
                 <span
                   className={`text-[10px] uppercase tracking-wider ${

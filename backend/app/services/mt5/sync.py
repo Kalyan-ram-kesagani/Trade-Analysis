@@ -260,6 +260,15 @@ async def sync_mt5_account(account_id: str) -> Dict[str, Any]:
                     }
                 )
 
+        # 6. Trigger Asynchronous Automatic AI Journaling for any closed trades without completed journals
+        # Non-blocking: will NOT hold up MT5 sync response or terminal communication
+        try:
+            from app.services.ai.auto_journal import process_unjournaled_closed_trades
+            import asyncio
+            asyncio.create_task(process_unjournaled_closed_trades(account_id))
+        except Exception as aj_err:
+            logger.warning(f"Could not dispatch auto-journal task: {aj_err}")
+
         return {
             "status": "ok",
             "account_id": account_id,

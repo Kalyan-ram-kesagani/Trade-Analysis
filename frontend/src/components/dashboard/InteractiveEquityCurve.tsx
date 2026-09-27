@@ -15,76 +15,111 @@ type Timeframe = '1D' | '1W' | '1M' | '3M' | '6M' | '1Y' | 'All';
 
 export const InteractiveEquityCurve: React.FC = () => {
   const {
-  selectedAccountId,
-  isAllAccounts,
-  activeAccount,
-  accounts,
-  theme,
-} = useTrading();
+    selectedAccountId,
+    isAllAccounts,
+    activeAccount,
+    accounts,
+    trades,
+    theme,
+  } = useTrading();
   const [timeframe, setTimeframe] = useState<Timeframe>('1M');
 
   const data = useMemo(() => {
-  if (isAllAccounts) {
-    if (accounts.length === 0) {
+    const currentBalance = isAllAccounts
+      ? accounts.reduce((sum, account) => sum + account.balance, 0)
+      : (activeAccount?.balance || 0);
+
+    const currentEquity = isAllAccounts
+      ? accounts.reduce((sum, account) => sum + account.equity, 0)
+      : (activeAccount?.equity || 0);
+
+    if (currentBalance === 0 && currentEquity === 0 && (!trades || trades.length === 0)) {
       return [];
     }
 
-    const balance = accounts.reduce(
-      (sum, account) => sum + account.balance,
-      0
-    );
+    // Filter closed trades by timeframe
+    const now = Date.now();
+    const timeframeMs: Record<Timeframe, number> = {
+      '1D': 86400000,
+      '1W': 7 * 86400000,
+      '1M': 30 * 86400000,
+      '3M': 90 * 86400000,
+      '6M': 180 * 86400000,
+      '1Y': 365 * 86400000,
+      'All': Infinity,
+    };
 
-    const equity = accounts.reduce(
-      (sum, account) => sum + account.equity,
-      0
-    );
+    const cutoff = now - timeframeMs[timeframe];
+    const validTrades = (trades || [])
+      .filter((t) => t.exit_time && new Date(t.exit_time).getTime() >= cutoff)
+      .sort((a, b) => new Date(a.exit_time).getTime() - new Date(b.exit_time).getTime());
 
-    const drawdown =
-      balance > 0
-        ? Math.max(
-            0,
-            Math.round(((balance - equity) / balance) * 1000) / 10
-          )
+    if (validTrades.length === 0) {
+      const dd = currentBalance > 0
+        ? Math.max(0, Math.round(((currentBalance - currentEquity) / currentBalance) * 1000) / 10)
         : 0;
+      return [
+        {
+          date: 'Current',
+          timestamp: now,
+          balance: currentBalance,
+          equity: currentEquity,
+          drawdown: dd,
+          pl: currentEquity - currentBalance,
+        },
+      ];
+    }
 
-    return [
+    const totalPnL = validTrades.reduce((sum, t) => sum + t.net_pl, 0);
+    const startBal = Math.max(100, currentBalance - totalPnL);
+
+    let runningBal = startBal;
+    let peakBal = runningBal;
+
+    const points = [
       {
-        date: 'Current',
-        timestamp: Date.now(),
-        balance,
-        equity,
-        drawdown,
-        pl: equity - balance,
+        date: 'Start',
+        timestamp: new Date(validTrades[0].entry_time).getTime() || (now - 86400000),
+        balance: Math.round(runningBal * 100) / 100,
+        equity: Math.round(runningBal * 100) / 100,
+        drawdown: 0,
+        pl: 0,
       },
     ];
-  }
 
-  if (!activeAccount) {
-    return [];
-  }
+    validTrades.forEach((t) => {
+      runningBal += t.net_pl;
+      if (runningBal > peakBal) peakBal = runningBal;
+      const dd = peakBal > 0
+        ? Math.max(0, Math.round(((peakBal - runningBal) / peakBal) * 1000) / 10)
+        : 0;
 
-  const balance = activeAccount.balance;
-  const equity = activeAccount.equity;
+      points.push({
+        date: new Date(t.exit_time).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+        timestamp: new Date(t.exit_time).getTime(),
+        balance: Math.round(runningBal * 100) / 100,
+        equity: Math.round(runningBal * 100) / 100,
+        drawdown: dd,
+        pl: t.net_pl,
+      });
+    });
 
-  const drawdown =
-    balance > 0
-      ? Math.max(
-          0,
-          Math.round(((balance - equity) / balance) * 1000) / 10
-        )
+    // Final point representing current live equity
+    const liveDrawdown = currentBalance > 0
+      ? Math.max(0, Math.round(((currentBalance - currentEquity) / currentBalance) * 1000) / 10)
       : 0;
 
-  return [
-    {
-      date: 'Current',
-      timestamp: Date.now(),
-      balance,
-      equity,
-      drawdown,
-      pl: equity - balance,
-    },
-  ];
-}, [isAllAccounts, accounts, activeAccount, timeframe]);
+    points.push({
+      date: 'Live',
+      timestamp: now,
+      balance: Math.round(currentBalance * 100) / 100,
+      equity: Math.round(currentEquity * 100) / 100,
+      drawdown: liveDrawdown,
+      pl: currentEquity - currentBalance,
+    });
+
+    return points;
+  }, [isAllAccounts, accounts, activeAccount, trades, timeframe]);
 
   const timeframes: Timeframe[] = ['1D', '1W', '1M', '3M', '6M', '1Y', 'All'];
 
@@ -187,7 +222,7 @@ export const InteractiveEquityCurve: React.FC = () => {
       </div>
 
       {/* Equity Curve */}
-<div className="mt-5 h-[300px] w-full">
+<div className="mt-5 h-[300px] w-full outline-none focus:outline-none">
   {data.length === 0 ? (
     <div
       className={`h-full flex items-center justify-center rounded-md border ${
@@ -219,15 +254,18 @@ export const InteractiveEquityCurve: React.FC = () => {
       </div>
     </div>
   ) : (
-    <ResponsiveContainer width="100%" height="100%">
+    <ResponsiveContainer width="100%" height="100%" className="outline-none focus:outline-none select-none">
       <AreaChart
         data={data}
         margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+        className="outline-none focus:outline-none"
+        style={{ outline: 'none' }}
       >
         <defs>
           <linearGradient
             id="equityFill"
             x1="0"
+
             y1="0"
             x2="0"
             y2="1"

@@ -61,6 +61,7 @@ interface TradingContextType {
   // Actions
   closePosition: (positionId: string) => Promise<void>;
   addJournalEntry: (entry: Omit<JournalEntry, 'id' | 'created_at' | 'updated_at'>) => Promise<void>;
+  refreshAccountData: (accId: string) => Promise<void>;
 
   // Modals & Inspection
   selectedTradeForDetails: Trade | null;
@@ -399,6 +400,7 @@ const [pingMs, setPingMs] = useState<number>(0);
         metrics,
         closePosition,
         addJournalEntry,
+        refreshAccountData,
         selectedTradeForDetails,
         setSelectedTradeForDetails,
         isAddAccountModalOpen,

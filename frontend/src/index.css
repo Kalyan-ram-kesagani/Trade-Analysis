@@ -128,3 +128,19 @@
   color: var(--text-primary);
 }
 
+/* Remove default focus outline/white box when clicking on charts */
+.recharts-responsive-container,
+.recharts-responsive-container *,
+.recharts-wrapper,
+.recharts-wrapper *,
+.recharts-surface,
+.recharts-surface * {
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+*:focus {
+  outline: none;
+}
+
+

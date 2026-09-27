@@ -8,6 +8,12 @@ import {
   RiskStatus,
   SystemHealthItem,
   EquityDataPoint,
+  AIStatus,
+  AIAnalysisResponse,
+  AIJournalResponse,
+  AIStrategyAnalysisResponse,
+  AIStrategyProposal,
+  AIAuditLog,
 } from '../types/trading';
 
 const API_BASE_URL =
@@ -298,6 +304,16 @@ function mapJournalEntry(entry: any): JournalEntry {
       : [],
     created_at: entry.created_at ?? '',
     updated_at: entry.updated_at ?? '',
+    journal_type: entry.journal_type ?? 'MANUAL',
+    status: entry.status ?? 'COMPLETED',
+    ai_provider: entry.ai_provider ?? undefined,
+    ai_model: entry.ai_model ?? undefined,
+    prompt_version: entry.prompt_version ?? undefined,
+    structured_ai_output: entry.structured_ai_output ?? undefined,
+    ai_confidence: entry.ai_confidence !== null && entry.ai_confidence !== undefined ? Number(entry.ai_confidence) : undefined,
+    error_info: entry.error_info ?? undefined,
+    retry_count: entry.retry_count !== null && entry.retry_count !== undefined ? Number(entry.retry_count) : 0,
+    generated_at: entry.generated_at ?? undefined,
     ai_detected_reason:
       entry.ai_detected_reason ?? undefined,
     ai_recommendation:
@@ -413,11 +429,14 @@ export const TradingAPI = {
   },
 
   async closePosition(
-    _positionId: string
+    positionId: string
   ): Promise<Trade | null> {
-    throw new Error(
-      'Closing MT5 positions is not connected yet.'
-    );
+    const data = await apiRequest<{ status: string; trade: any }>('/api/positions/close', {
+      method: 'POST',
+      body: JSON.stringify({ position_id: positionId }),
+    });
+
+    return data.trade ? mapTrade(data.trade) : null;
   },
 
   // =====================================================
@@ -477,14 +496,31 @@ export const TradingAPI = {
   },
 
   async addJournalEntry(
-    _entry: Omit<
+    entry: Omit<
       JournalEntry,
       'id' | 'created_at' | 'updated_at'
     >
   ): Promise<JournalEntry> {
-    throw new Error(
-      'Creating journal entries is not connected to the backend yet.'
-    );
+    const data = await apiRequest<any>('/api/journal', {
+      method: 'POST',
+      body: JSON.stringify({
+        account_id: entry.account_id,
+        trade_id: entry.trade_id,
+        symbol: entry.symbol,
+        date: entry.date,
+        result: entry.result,
+        notes: entry.notes,
+        reason: entry.reason,
+        lessons: entry.lessons || '',
+        strategy_version: entry.strategy_version || '',
+        tags: entry.tags || [],
+        ai_detected_reason: entry.ai_detected_reason,
+        ai_recommendation: entry.ai_recommendation,
+        ai_modification: entry.ai_modification,
+      }),
+    });
+
+    return mapJournalEntry(data);
   },
 
   // =====================================================
@@ -621,14 +657,180 @@ export const TradingAPI = {
   // EQUITY CURVE
   // =====================================================
 
-  getEquityCurve(
-    _accountId: string,
-    _timeframe: string
-  ): EquityDataPoint[] {
-    /*
-     * Equity history endpoint has not been created yet.
-     * Keep returning an empty array instead of mock data.
-     */
-    return [];
+  async getEquityCurve(
+    accountId: string,
+    timeframe: string
+  ): Promise<EquityDataPoint[]> {
+    const query = buildAccountQuery(accountId);
+    const sep = query ? '&' : '?';
+    const endpoint = `/api/equity-curve${query}${sep}timeframe=${encodeURIComponent(timeframe)}`;
+
+    try {
+      const data = await apiRequest<{
+        equity_curve: EquityDataPoint[];
+      }>(endpoint);
+
+      return data.equity_curve || [];
+    } catch {
+      return [];
+    }
+  },
+
+  // =====================================================
+  // AI LAYER SERVICES
+  // =====================================================
+
+  async getAIStatus(): Promise<AIStatus> {
+    return apiRequest<AIStatus>('/api/ai/status');
+  },
+
+  async getAIAnalysis(accountId: string): Promise<AIAnalysisResponse> {
+    return apiRequest<AIAnalysisResponse>('/api/ai/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ account_id: accountId }),
+    });
+  },
+
+  async generateAIJournal(
+    accountId: string,
+    tradeId: string
+  ): Promise<AIJournalResponse> {
+    return apiRequest<AIJournalResponse>('/api/ai/journal', {
+      method: 'POST',
+      body: JSON.stringify({ account_id: accountId, trade_id: tradeId }),
+    });
+  },
+
+  async retryAIJournal(
+    accountId: string,
+    tradeId: string
+  ): Promise<AIJournalResponse> {
+    return apiRequest<AIJournalResponse>('/api/ai/journal/retry', {
+      method: 'POST',
+      body: JSON.stringify({ account_id: accountId, trade_id: tradeId, force_regenerate: true }),
+    });
+  },
+
+  async autoProcessAIJournals(accountId: string): Promise<{ status: string; scheduled_trades: number }> {
+    return apiRequest<{ status: string; scheduled_trades: number }>(
+      `/api/ai/journal/auto-process?account_id=${encodeURIComponent(accountId)}`,
+      { method: 'POST' }
+    );
+  },
+
+  async analyzeStrategyWithAI(
+    strategyId: string,
+    accountId?: string
+  ): Promise<AIStrategyAnalysisResponse> {
+    return apiRequest<AIStrategyAnalysisResponse>('/api/ai/strategy/analyze', {
+      method: 'POST',
+      body: JSON.stringify({
+        strategy_id: strategyId,
+        account_id: accountId && accountId !== 'all' ? accountId : undefined,
+      }),
+    });
+  },
+
+  async proposeStrategyImprovementWithAI(
+    strategyId: string,
+    accountId?: string,
+    focusArea?: string
+  ): Promise<AIStrategyProposal> {
+    return apiRequest<AIStrategyProposal>('/api/ai/strategy/propose', {
+      method: 'POST',
+      body: JSON.stringify({
+        strategy_id: strategyId,
+        account_id: accountId && accountId !== 'all' ? accountId : undefined,
+        focus_area: focusArea || undefined,
+      }),
+    });
+  },
+
+  async getStrategyProposals(
+    strategyId?: string,
+    accountId?: string
+  ): Promise<AIStrategyProposal[]> {
+    const params = new URLSearchParams();
+    if (strategyId) params.append('strategy_id', strategyId);
+    if (accountId && accountId !== 'all') params.append('account_id', accountId);
+
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const data = await apiRequest<{ proposals: any[] }>(
+      `/api/ai/strategy/proposals${query}`
+    );
+    return data.proposals || [];
+  },
+
+  async updateProposalStatus(
+    proposalId: string,
+    status: string,
+    approvedBy?: string,
+    rejectedReason?: string
+  ): Promise<boolean> {
+    await apiRequest(`/api/ai/strategy/proposals/${proposalId}/status`, {
+      method: 'POST',
+      body: JSON.stringify({
+        status,
+        approved_by: approvedBy,
+        rejected_reason: rejectedReason,
+      }),
+    });
+    return true;
+  },
+
+  async validateProposal(proposalId: string): Promise<any> {
+    return apiRequest(`/api/ai/strategy/proposals/${proposalId}/validate`, {
+      method: 'POST',
+    });
+  },
+
+  async approveProposal(proposalId: string, approvedBy: string, notes?: string): Promise<any> {
+    return apiRequest(`/api/ai/strategy/proposals/${proposalId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({
+        approved_by: approvedBy,
+        notes: notes || undefined,
+      }),
+    });
+  },
+
+  async deployProposal(
+    proposalId: string,
+    deployedBy: string,
+    targetAccounts: string[],
+    liveRiskPct?: number
+  ): Promise<any> {
+    return apiRequest(`/api/ai/strategy/proposals/${proposalId}/deploy`, {
+      method: 'POST',
+      body: JSON.stringify({
+        deployed_by: deployedBy,
+        target_accounts: targetAccounts,
+        live_risk_percentage: liveRiskPct ?? 1.0,
+      }),
+    });
+  },
+
+  async runBacktest(params: {
+    symbol?: string;
+    timeframe?: string;
+    initial_balance?: number;
+    risk_per_trade_pct?: number;
+    strategy_id?: string;
+    proposal_id?: string;
+    account_id?: string;
+    parameters?: Record<string, any>;
+  }): Promise<any> {
+    return apiRequest('/api/backtests', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  },
+
+  async getAIAuditLogs(accountId?: string): Promise<AIAuditLog[]> {
+    const query = accountId && accountId !== 'all' ? `?account_id=${accountId}` : '';
+    const data = await apiRequest<{ audit_logs: any[] }>(
+      `/api/ai/audit${query}`
+    );
+    return data.audit_logs || [];
   },
 };

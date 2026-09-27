@@ -1,5 +1,5 @@
 {
-  "name": "Aegis Trader - Automated Trading System",
+  "name": "Trade-Analysis- Automated Trading System",
   "description": "Professional automated trading platform with multi-account MT5 architecture, real-time metrics, risk management, trade journaling, and strategy management.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

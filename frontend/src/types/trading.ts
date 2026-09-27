@@ -144,7 +144,35 @@ export interface JournalEntry {
   tags: string[];
   created_at: string;
   updated_at: string;
-  // Reserved for AI Phase
+  // Automatic AI Journaling Fields
+  journal_type?: 'MANUAL' | 'AI_TRADE_REVIEW';
+  status?: 'PENDING_AI' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
+  ai_provider?: string;
+  ai_model?: string;
+  prompt_version?: string;
+  structured_ai_output?: {
+    trade_summary?: string;
+    market_context?: string;
+    entry_analysis?: string;
+    exit_analysis?: string;
+    risk_analysis?: string;
+    execution_analysis?: string;
+    what_went_well?: string[];
+    what_could_be_improved?: string[];
+    mistakes_violations?: string[];
+    pattern_observed?: string;
+    lesson?: string;
+    suggested_improvement?: string;
+    ai_confidence?: number;
+    execution_quality_score?: number;
+    ai_disclaimer?: string;
+    [key: string]: any;
+  };
+  ai_confidence?: number;
+  error_info?: string;
+  retry_count?: number;
+  generated_at?: string;
+  // Legacy / Quick access
   ai_detected_reason?: string;
   ai_recommendation?: string;
   ai_modification?: string;
@@ -176,3 +204,215 @@ export interface EquityDataPoint {
   drawdown: number;
   pl: number;
 }
+
+// ==========================================
+// AI LAYER TYPES
+// ==========================================
+
+export interface AIStatus {
+  configured: boolean;
+  provider: string;
+  model: string;
+  model_display: string;
+}
+
+export interface AIObservation {
+  text: string;
+  source: 'observed_data' | 'calculated_metric' | 'ai_interpretation' | 'recommendation';
+  confidence?: number;
+}
+
+export interface AIWarning {
+  text: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+}
+
+export interface AIRecommendation {
+  text: string;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  rationale?: string;
+}
+
+export interface AISymbolAnalysis {
+  symbol: string;
+  market_regime: 'trending' | 'ranging' | 'volatile' | 'unknown';
+  trend: 'bullish' | 'bearish' | 'neutral' | 'unknown';
+  volatility: 'low' | 'moderate' | 'high' | 'extreme' | 'unknown';
+  observations: string[];
+}
+
+export interface AIAnalysisResponse {
+  account_id: string;
+  timestamp: string;
+  overall_market_regime: 'trending' | 'ranging' | 'volatile' | 'unknown';
+  overall_trend: 'bullish' | 'bearish' | 'neutral' | 'unknown';
+  overall_volatility: 'low' | 'moderate' | 'high' | 'extreme' | 'unknown';
+  strategy_status: string;
+  risk_status: 'low' | 'acceptable' | 'elevated' | 'high' | 'critical';
+  observations: AIObservation[];
+  warnings: AIWarning[];
+  recommendations: AIRecommendation[];
+  symbol_analyses: AISymbolAnalysis[];
+  data_summary: string;
+  ai_disclaimer: string;
+}
+
+export interface AIJournalResponse {
+  trade_id: string;
+  account_id: string;
+  symbol: string;
+  result: string;
+  timestamp: string;
+  summary: string;
+  entry_reason: string;
+  exit_reason: string;
+  strategy_adherence: string;
+  what_went_well: string[];
+  what_went_wrong: string[];
+  lessons: string[];
+  tags: string[];
+  execution_quality_score?: number;
+  risk_management_assessment: string;
+  ai_disclaimer: string;
+}
+
+export interface AIStrategyAnalysisResponse {
+  strategy_id: string;
+  strategy_name: string;
+  strategy_version: string;
+  timestamp: string;
+  performance_summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  identified_issues: string[];
+  evidence: string[];
+  improvement_suggestions: string[];
+  ai_disclaimer: string;
+}
+
+export interface QuantitativeMetrics {
+  initial_balance: number;
+  final_equity: number;
+  net_profit: number;
+  net_profit_pct: number;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate_pct: number;
+  profit_factor: number;
+  average_win: number;
+  average_loss: number;
+  win_loss_ratio: number;
+  expectancy: number;
+  max_drawdown_amount: number;
+  max_drawdown_pct: number;
+  sharpe_ratio: number;
+  sortino_ratio: number;
+  calmar_ratio: number;
+  total_commission_paid: number;
+  total_slippage_cost: number;
+}
+
+export interface ValidationPipelineResult {
+  proposal_id: string;
+  status: string;
+  all_stages_passed: boolean;
+  backtest: QuantitativeMetrics;
+  out_of_sample: {
+    passed: boolean;
+    split_ratio: number;
+    in_sample: Record<string, number>;
+    out_of_sample: Record<string, number>;
+    retention: { pf_retention_pct: number; sharpe_retention_pct: number };
+    warnings: string[];
+  };
+  walk_forward: {
+    passed: boolean;
+    windows_count: number;
+    consistency_score_pct: number;
+    walk_forward_efficiency_pct: number;
+    cumulative_oos_profit: number;
+    cumulative_is_profit: number;
+    windows: any[];
+  };
+  monte_carlo: {
+    passed: boolean;
+    simulations_count: number;
+    risk_of_ruin_pct: number;
+    drawdown_confidence_intervals: Record<string, number>;
+    profit_confidence_intervals: Record<string, number>;
+  };
+  sensitivity_stress: {
+    passed: boolean;
+    baseline: Record<string, number>;
+    perturbation_analysis: any[];
+    execution_stress: any;
+  };
+  risk_validation: {
+    passed: boolean;
+    status: string;
+    rules_applied: Record<string, any>;
+    checks: Array<{ name: string; required: string; actual: string; passed: boolean }>;
+    summary: string;
+  };
+}
+
+export interface AIStrategyProposal {
+  id?: string;
+  strategy_id: string;
+  base_strategy_name: string;
+  base_strategy_version: string;
+  proposed_version: string;
+  timestamp: string;
+  identified_issue: string;
+  evidence: string[];
+  hypothesis: string;
+  proposed_change: string;
+  expected_purpose: string;
+  validation_required: boolean;
+  status:
+    | 'DRAFT'
+    | 'AI_PROPOSED'
+    | 'BACKTEST_PENDING'
+    | 'BACKTESTED'
+    | 'OUT_OF_SAMPLE'
+    | 'WALK_FORWARD'
+    | 'MONTE_CARLO'
+    | 'RISK_VALIDATION'
+    | 'APPROVAL_REQUIRED'
+    | 'APPROVED'
+    | 'REJECTED'
+    | 'DEPLOYED';
+  backtest_result?: any;
+  oos_result?: any;
+  walkforward_result?: any;
+  montecarlo_result?: any;
+  risk_validation_result?: any;
+  data_provenance?: 'REAL_MT5' | 'IMPORTED_HISTORICAL' | 'SYNTHETIC_TEST' | string;
+  production_eligible?: boolean;
+  live_deployment_eligible?: boolean;
+  strategy_snapshot?: any;
+  approved_by?: string;
+
+  approved_at?: string;
+  rejected_reason?: string;
+  created_at?: string;
+  ai_disclaimer?: string;
+}
+
+export interface AIAuditLog {
+  id: string;
+  account_id?: string;
+  agent_type: string;
+  model: string;
+  input_summary?: string;
+  output_summary?: string;
+  tools_used?: string[];
+  duration_ms?: number;
+  error?: string;
+  related_trade_id?: string;
+  related_strategy_id?: string;
+  created_at: string;
+}
+
+
