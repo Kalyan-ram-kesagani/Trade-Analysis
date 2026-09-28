@@ -235,6 +235,38 @@ async def sync_account(account_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+SUPPORTED_MARKET_SYMBOLS = {
+    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "NZDUSD", "USDCAD",
+    "XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD"
+}
+
+@app.get("/api/mt5/price/{symbol}")
+async def get_mt5_price(symbol: str):
+    clean_symbol = symbol.upper().strip()
+    if clean_symbol not in SUPPORTED_MARKET_SYMBOLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Symbol '{clean_symbol}' is not in allowed symbols list: {sorted(list(SUPPORTED_MARKET_SYMBOLS))}"
+        )
+
+    from app.services.mt5.bridge_client import MT5BridgeClient
+    client = MT5BridgeClient()
+    if not client.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="MT5 Bridge is not configured on this environment."
+        )
+
+    try:
+        data = await client.get_price(clean_symbol)
+        return data
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 
 
 @app.get("/api/trades")

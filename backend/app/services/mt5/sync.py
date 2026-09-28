@@ -1,7 +1,7 @@
 """
 MetaTrader 5 Real-Time & Historical Data Synchronization Service
-Connects directly to the local Windows MT5 Terminal to pull account telemetry,
-open positions, and historical closed deals into PostgreSQL.
+Connects via Windows MT5 Bridge (or fallback to local Windows MT5 Terminal)
+to pull account telemetry, open positions, and historical closed deals into PostgreSQL/Supabase.
 """
 
 from datetime import datetime, timezone
@@ -10,6 +10,7 @@ from typing import Dict, Any, List
 from collections import defaultdict
 from sqlalchemy import text
 from app.database import AsyncSessionLocal
+from app.services.mt5.bridge_client import MT5BridgeClient
 
 logger = logging.getLogger("mt5_sync")
 
@@ -17,17 +18,19 @@ try:
     import MetaTrader5 as mt5
     MT5_AVAILABLE = True
 except ImportError:
+    mt5 = None
     MT5_AVAILABLE = False
-    logger.warning("MetaTrader5 package is not installed or platform is non-Windows.")
+    logger.info("Local MetaTrader5 package not available; using MT5 Bridge client.")
 
 
 async def sync_mt5_account(account_id: str) -> Dict[str, Any]:
     """
-    Connect to MetaTrader 5 terminal, pull real-time account telemetry,
-    open positions, and historical deals, then persist them to Supabase.
+    Synchronize MT5 account telemetry, open positions, and historical deals,
+    then persist them to Supabase/PostgreSQL.
+    Primary channel: MT5 Bridge client (works on Vercel/Linux and Windows).
+    Fallback channel: Direct MT5 package if running locally on Windows and bridge is not configured.
     """
-    if not MT5_AVAILABLE:
-        raise RuntimeError("MetaTrader5 python package is not available on this environment.")
+    bridge = MT5BridgeClient()
 
     # 1. Retrieve account from database
     async with AsyncSessionLocal() as session:
@@ -46,24 +49,82 @@ async def sync_mt5_account(account_id: str) -> Dict[str, Any]:
     target_login = int(account["account_number"])
     target_server = account["server"]
 
-    # 2. Initialize MT5 terminal
-    if not mt5.initialize():
-        last_err = mt5.last_error()
-        raise RuntimeError(f"Failed to initialize MT5 terminal: {last_err}")
+    parsed_positions: List[Dict[str, Any]] = []
+    parsed_trades: List[Dict[str, Any]] = []
 
-    try:
-        # Check currently active terminal login
+    # 2. Fetch data via Bridge or Direct
+    if bridge.is_configured():
+        logger.info(f"Syncing account {target_login} via MT5 Bridge...")
+        account_info = await bridge.get_account()
+
+        if int(account_info.get("login", 0)) != target_login:
+            logger.warning(
+                f"Bridge MT5 is logged into {account_info.get('login')}, target is {target_login}. "
+                f"Proceeding with active terminal telemetry."
+            )
+
+        balance = float(account_info.get("balance", 0.0))
+        equity = float(account_info.get("equity", 0.0))
+        margin = float(account_info.get("margin", 0.0))
+        free_margin = float(account_info.get("margin_free", 0.0))
+        margin_level = (equity / margin * 100.0) if margin > 0 else 0.0
+        floating_pl = round(equity - balance, 2)
+
+        # Fetch open positions from bridge
+        raw_positions = await bridge.get_positions()
+        for pos in raw_positions:
+            entry_dt = datetime.fromtimestamp(pos["time"], timezone.utc) if isinstance(pos.get("time"), (int, float)) else datetime.now(timezone.utc)
+            parsed_positions.append({
+                "ticket": int(pos["ticket"]),
+                "symbol": str(pos["symbol"]),
+                "direction": str(pos.get("type", "BUY")),
+                "volume": float(pos["volume"]),
+                "entry_price": float(pos["price_open"]),
+                "current_price": float(pos["price_current"]),
+                "stop_loss": float(pos["sl"]) if pos.get("sl") else None,
+                "take_profit": float(pos["tp"]) if pos.get("tp") else None,
+                "floating_pl": float(pos.get("profit", 0.0)),
+                "entry_time": entry_dt,
+                "strategy_name": "Manual / MT5",
+            })
+
+        # Fetch historical trades from bridge
+        raw_trades = await bridge.get_history_trades(days=90)
+        for tr in raw_trades:
+            entry_time = datetime.fromtimestamp(tr["entry_time"], timezone.utc) if isinstance(tr.get("entry_time"), (int, float)) else datetime.now(timezone.utc)
+            exit_time = datetime.fromtimestamp(tr["exit_time"], timezone.utc) if isinstance(tr.get("exit_time"), (int, float)) else datetime.now(timezone.utc)
+            parsed_trades.append({
+                "ticket": int(tr["ticket"]),
+                "symbol": str(tr["symbol"]),
+                "direction": str(tr["direction"]),
+                "volume": float(tr["volume"]),
+                "entry_price": float(tr["entry_price"]),
+                "exit_price": float(tr["exit_price"]),
+                "stop_loss": float(tr["stop_loss"]) if tr.get("stop_loss") else None,
+                "take_profit": float(tr["take_profit"]) if tr.get("take_profit") else None,
+                "entry_time": entry_time,
+                "exit_time": exit_time,
+                "profit_loss": float(tr["profit_loss"]),
+                "commission": float(tr.get("commission", 0.0)),
+                "swap": float(tr.get("swap", 0.0)),
+                "net_pl": float(tr["net_pl"]),
+                "status": str(tr.get("status", "BREAKEVEN")),
+            })
+
+    elif MT5_AVAILABLE and mt5 is not None:
+        logger.info(f"Syncing account {target_login} via local Windows MT5 Terminal...")
+        if not mt5.initialize():
+            last_err = mt5.last_error()
+            raise RuntimeError(f"Failed to initialize MT5 terminal: {last_err}")
+
         current_info = mt5.account_info()
         if not current_info or current_info.login != target_login:
-            # Attempt to login or attach
             login_success = mt5.login(login=target_login, server=target_server)
             if not login_success:
                 err = mt5.last_error()
-                # If terminal is already logged into another account, report details
                 active_login = current_info.login if current_info else "none"
                 raise RuntimeError(
-                    f"MT5 terminal is active with login {active_login}, but failed to switch to account {target_login} on {target_server}: {err}. "
-                    f"Please ensure MT5 terminal is opened and logged into account {target_login}."
+                    f"MT5 terminal is active with login {active_login}, but failed to switch to account {target_login} on {target_server}: {err}."
                 )
 
         info = mt5.account_info()
@@ -77,9 +138,8 @@ async def sync_mt5_account(account_id: str) -> Dict[str, Any]:
         margin_level = float(info.margin_level) if info.margin_level else 0.0
         floating_pl = float(info.profit)
 
-        # 3. Fetch Open Positions
+        # Open Positions
         mt5_positions = mt5.positions_get()
-        parsed_positions = []
         if mt5_positions:
             for pos in mt5_positions:
                 parsed_positions.append({
@@ -96,28 +156,22 @@ async def sync_mt5_account(account_id: str) -> Dict[str, Any]:
                     "strategy_name": "Manual / MT5",
                 })
 
-        # 4. Fetch Historical Deals (past trades)
+        # Historical Deals
         from_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
         to_date = datetime.now(timezone.utc)
         mt5_deals = mt5.history_deals_get(from_date, to_date)
-        
-        parsed_trades = []
         if mt5_deals:
-            # Group deals by position_id to reconstruct full round-trip trades
             position_deals = defaultdict(list)
             for deal in mt5_deals:
-                # Skip non-trade / balance deposits
                 if deal.position_id == 0 or not deal.symbol:
                     continue
                 position_deals[deal.position_id].append(deal)
 
             for pos_id, deals in position_deals.items():
-                # Sort deals chronologically
                 deals.sort(key=lambda d: d.time)
-                entry_deals = [d for d in deals if d.entry == 0] # DEAL_ENTRY_IN
-                exit_deals = [d for d in deals if d.entry in (1, 2, 3)] # DEAL_ENTRY_OUT
+                entry_deals = [d for d in deals if d.entry == 0]
+                exit_deals = [d for d in deals if d.entry in (1, 2, 3)]
 
-                # Only completed trades have an exit deal
                 if not exit_deals:
                     continue
 
@@ -136,12 +190,7 @@ async def sync_mt5_account(account_id: str) -> Dict[str, Any]:
                 swap = float(sum(d.swap for d in deals))
                 net_pl = round(profit_loss + commission + swap, 2)
 
-                if net_pl > 0:
-                    trade_status = "WIN"
-                elif net_pl < 0:
-                    trade_status = "LOSS"
-                else:
-                    trade_status = "BREAKEVEN"
+                status = "WIN" if net_pl > 0 else "LOSS" if net_pl < 0 else "BREAKEVEN"
 
                 parsed_trades.append({
                     "ticket": int(pos_id),
@@ -158,128 +207,127 @@ async def sync_mt5_account(account_id: str) -> Dict[str, Any]:
                     "commission": round(commission, 2),
                     "swap": round(swap, 2),
                     "net_pl": net_pl,
-                    "status": trade_status,
+                    "status": status,
                 })
+    else:
+        raise RuntimeError(
+            "Neither MT5 Bridge (MT5_BRIDGE_URL / MT5_BRIDGE_TOKEN) nor local MetaTrader5 package is available."
+        )
 
-        # 5. Persist everything to database in a single transaction
-        async with AsyncSessionLocal() as session:
-            async with session.begin():
-                # Update trading account telemetry
+    # 3. Persist everything to database in a single transaction
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            # Update trading account telemetry
+            await session.execute(
+                text("""
+                    UPDATE trading_accounts SET
+                        balance = :balance,
+                        equity = :equity,
+                        margin = :margin,
+                        free_margin = :free_margin,
+                        margin_level = :margin_level,
+                        floating_pl = :floating_pl,
+                        status = 'connected',
+                        last_sync = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = CAST(:account_id AS UUID)
+                """),
+                {
+                    "account_id": account_id,
+                    "balance": balance,
+                    "equity": equity,
+                    "margin": margin,
+                    "free_margin": free_margin,
+                    "margin_level": margin_level,
+                    "floating_pl": floating_pl,
+                }
+            )
+
+            # Replace open positions
+            await session.execute(
+                text("DELETE FROM open_positions WHERE account_id = CAST(:account_id AS UUID)"),
+                {"account_id": account_id}
+            )
+            for pos in parsed_positions:
                 await session.execute(
                     text("""
-                        UPDATE trading_accounts SET
-                            balance = :balance,
-                            equity = :equity,
-                            margin = :margin,
-                            free_margin = :free_margin,
-                            margin_level = :margin_level,
-                            floating_pl = :floating_pl,
-                            status = 'connected',
-                            last_sync = CURRENT_TIMESTAMP,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id = CAST(:account_id AS UUID)
-                    """),
-                    {
-                        "account_id": account_id,
-                        "balance": balance,
-                        "equity": equity,
-                        "margin": margin,
-                        "free_margin": free_margin,
-                        "margin_level": margin_level,
-                        "floating_pl": floating_pl,
-                    }
-                )
-
-                # Replace open positions
-                await session.execute(
-                    text("DELETE FROM open_positions WHERE account_id = CAST(:account_id AS UUID)"),
-                    {"account_id": account_id}
-                )
-                for pos in parsed_positions:
-                    await session.execute(
-                        text("""
-                            INSERT INTO open_positions (
-                                ticket, account_id, symbol, direction, volume,
-                                entry_price, current_price, stop_loss, take_profit,
-                                floating_pl, entry_time, strategy_name, updated_at
-                            ) VALUES (
-                                :ticket, CAST(:account_id AS UUID), :symbol, :direction, :volume,
-                                :entry_price, :current_price, :stop_loss, :take_profit,
-                                :floating_pl, :entry_time, :strategy_name, CURRENT_TIMESTAMP
-                            )
-                            ON CONFLICT (account_id, ticket) DO UPDATE SET
-                                current_price = EXCLUDED.current_price,
-                                floating_pl = EXCLUDED.floating_pl,
-                                updated_at = CURRENT_TIMESTAMP
-                        """),
-                        {**pos, "account_id": account_id}
-                    )
-
-                # Upsert trades
-                for trade in parsed_trades:
-                    await session.execute(
-                        text("""
-                            INSERT INTO trades (
-                                ticket, account_id, symbol, direction, volume,
-                                entry_price, exit_price, stop_loss, take_profit,
-                                entry_time, exit_time, profit_loss, commission, swap, net_pl,
-                                status, initial_risk_percent, initial_risk_amount
-                            ) VALUES (
-                                :ticket, CAST(:account_id AS UUID), :symbol, :direction, :volume,
-                                :entry_price, :exit_price, :stop_loss, :take_profit,
-                                :entry_time, :exit_time, :profit_loss, :commission, :swap, :net_pl,
-                                :status, 1.0, 0.0
-                            )
-                            ON CONFLICT (account_id, ticket) DO UPDATE SET
-                                exit_price = EXCLUDED.exit_price,
-                                exit_time = EXCLUDED.exit_time,
-                                profit_loss = EXCLUDED.profit_loss,
-                                commission = EXCLUDED.commission,
-                                swap = EXCLUDED.swap,
-                                net_pl = EXCLUDED.net_pl,
-                                status = EXCLUDED.status
-                        """),
-                        {**trade, "account_id": account_id}
-                    )
-
-                # Log activity
-                await session.execute(
-                    text("""
-                        INSERT INTO system_activities (account_id, type, title, description, level)
-                        VALUES (
-                            CAST(:account_id AS UUID),
-                            'sync',
-                            'MT5 Sync Completed',
-                            :description,
-                            'success'
+                        INSERT INTO open_positions (
+                            ticket, account_id, symbol, direction, volume,
+                            entry_price, current_price, stop_loss, take_profit,
+                            floating_pl, entry_time, strategy_name, updated_at
+                        ) VALUES (
+                            :ticket, CAST(:account_id AS UUID), :symbol, :direction, :volume,
+                            :entry_price, :current_price, :stop_loss, :take_profit,
+                            :floating_pl, :entry_time, :strategy_name, CURRENT_TIMESTAMP
                         )
+                        ON CONFLICT (account_id, ticket) DO UPDATE SET
+                            current_price = EXCLUDED.current_price,
+                            floating_pl = EXCLUDED.floating_pl,
+                            updated_at = CURRENT_TIMESTAMP
                     """),
-                    {
-                        "account_id": account_id,
-                        "description": f"Synced {len(parsed_trades)} historical trades and {len(parsed_positions)} open positions from MT5"
-                    }
+                    {**pos, "account_id": account_id}
                 )
 
-        # 6. Trigger Asynchronous Automatic AI Journaling for any closed trades without completed journals
-        # Non-blocking: will NOT hold up MT5 sync response or terminal communication
-        try:
-            from app.services.ai.auto_journal import process_unjournaled_closed_trades
-            import asyncio
-            asyncio.create_task(process_unjournaled_closed_trades(account_id))
-        except Exception as aj_err:
-            logger.warning(f"Could not dispatch auto-journal task: {aj_err}")
+            # Upsert trades
+            for trade in parsed_trades:
+                await session.execute(
+                    text("""
+                        INSERT INTO trades (
+                            ticket, account_id, symbol, direction, volume,
+                            entry_price, exit_price, stop_loss, take_profit,
+                            entry_time, exit_time, profit_loss, commission, swap, net_pl,
+                            status, initial_risk_percent, initial_risk_amount
+                        ) VALUES (
+                            :ticket, CAST(:account_id AS UUID), :symbol, :direction, :volume,
+                            :entry_price, :exit_price, :stop_loss, :take_profit,
+                            :entry_time, :exit_time, :profit_loss, :commission, :swap, :net_pl,
+                            :status, 1.0, 0.0
+                        )
+                        ON CONFLICT (account_id, ticket) DO UPDATE SET
+                            exit_price = EXCLUDED.exit_price,
+                            exit_time = EXCLUDED.exit_time,
+                            profit_loss = EXCLUDED.profit_loss,
+                            commission = EXCLUDED.commission,
+                            swap = EXCLUDED.swap,
+                            net_pl = EXCLUDED.net_pl,
+                            status = EXCLUDED.status
+                    """),
+                    {**trade, "account_id": account_id}
+                )
 
-        return {
-            "status": "ok",
-            "account_id": account_id,
-            "lastSync": datetime.utcnow().isoformat(),
-            "ping": 18,
-            "trades_synced": len(parsed_trades),
-            "positions_synced": len(parsed_positions),
-            "balance": balance,
-            "equity": equity,
-        }
+            # Log system activity
+            await session.execute(
+                text("""
+                    INSERT INTO system_activities (account_id, type, title, description, level)
+                    VALUES (
+                        CAST(:account_id AS UUID),
+                        'sync',
+                        'MT5 Sync Completed',
+                        :description,
+                        'success'
+                    )
+                """),
+                {
+                    "account_id": account_id,
+                    "description": f"Synced {len(parsed_trades)} historical trades and {len(parsed_positions)} open positions from MT5"
+                }
+            )
 
-    finally:
-        # Note: We do not call mt5.shutdown() so the user's active terminal remains attached
-        pass
+    # 4. Trigger Asynchronous Automatic AI Journaling
+    try:
+        from app.services.ai.auto_journal import process_unjournaled_closed_trades
+        import asyncio
+        asyncio.create_task(process_unjournaled_closed_trades(account_id))
+    except Exception as aj_err:
+        logger.warning(f"Could not dispatch auto-journal task: {aj_err}")
+
+    return {
+        "status": "ok",
+        "account_id": account_id,
+        "lastSync": datetime.now(timezone.utc).isoformat(),
+        "ping": 18,
+        "trades_synced": len(parsed_trades),
+        "positions_synced": len(parsed_positions),
+        "balance": balance,
+        "equity": equity,
+    }
